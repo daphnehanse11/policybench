@@ -7,6 +7,7 @@ import {
   getProviderForModel,
   getPredictionTextColor,
 } from "../modelMeta";
+import ExplanationTooltip from "./ExplanationTooltip";
 import ProviderMark from "./ProviderMark";
 
 function formatBoolean(value: number): string {
@@ -459,13 +460,9 @@ export default function ScenarioExplorer({
                             {displayPred}
                           </div>
                           {pred.explanation && (
-                            <span
-                              className="inline-flex rounded-full border border-border px-1.5 py-0.5 text-[10px] leading-none text-text-muted cursor-help"
-                              title={pred.explanation}
-                              aria-label={pred.explanation}
-                            >
+                            <ExplanationTooltip explanation={pred.explanation}>
                               why
-                            </span>
+                            </ExplanationTooltip>
                           )}
                         </div>
                       </td>
