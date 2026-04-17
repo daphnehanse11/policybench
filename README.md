@@ -40,7 +40,7 @@ pytest  # Run tests (mocked, no API calls)
 # Generate reference outputs for 100 sampled CPS households
 policybench ground-truth -n 100 --seed 42
 
-# Run AI-alone evaluations on the same sampled households
+# Run AI-alone evaluations on the exported scenario manifest
 policybench eval-no-tools -n 100 --seed 42
 
 # Analyze local results and export local artifacts
@@ -50,9 +50,14 @@ policybench analyze --output-dir results/local/analysis
 ## Repeated runs
 
 ```bash
-# Optional: run the same benchmark multiple times on the same sampled households
+# Optional: run the same benchmark multiple times on the saved scenario manifest
 policybench eval-no-tools-repeated -n 100 --seed 42 --repeats 3 -o results/local/no_tools/runs
 
 # Analyze the canonical point estimate plus across-run stability
 policybench analyze --runs-dir results/local/no_tools/runs --output-dir results/local/analysis
 ```
+
+`policybench ground-truth` writes `results/local/scenarios.csv`, and the eval
+commands reuse that manifest by default instead of regenerating households from
+the current source dataset. Prediction CSVs also get a `.meta.json` sidecar so
+resumes only happen against the exact same manifest, model set, and program set.

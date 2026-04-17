@@ -9,6 +9,8 @@ import pytest
 
 from policybench.config import COUNTRY_PROGRAMS
 from policybench.eval_no_tools import (
+    _build_resume_metadata,
+    _write_resume_metadata,
     _build_answer_tool,
     extract_explanations,
     extract_number,
@@ -22,6 +24,29 @@ from policybench.eval_no_tools import (
 )
 from policybench.prompts import make_no_tools_batch_prompt, make_no_tools_prompt
 from policybench.scenarios import Person, Scenario
+
+
+def _write_resume_sidecar(
+    output_path,
+    scenarios,
+    *,
+    models=None,
+    programs=None,
+    task="eval_no_tools_batch",
+    run_id=None,
+    include_explanations=False,
+):
+    models = {"gpt-5.4": "gpt-5.4"} if models is None else models
+    programs = ["income_tax"] if programs is None else programs
+    metadata = _build_resume_metadata(
+        task=task,
+        scenarios=scenarios,
+        models=models,
+        programs=programs,
+        run_id=run_id,
+        include_explanations=include_explanations,
+    )
+    _write_resume_metadata(str(output_path), metadata)
 
 
 @pytest.fixture
@@ -119,19 +144,19 @@ class TestExtractNumber:
     def test_json_answer_object(self):
         assert extract_number('{"answer": 3500}') == 3500.0
 
-    def test_json_answer_with_explanation_after(self):
+    def test_none_for_json_answer_with_extra_text(self):
         assert (
             extract_number('{"answer": 3500}\nThe household has no refundable credits.')
-            == 3500.0
+            is None
         )
 
-    def test_truncated_json_answer_prefix(self):
-        assert extract_number('{"answer": 4923') == 4923.0
+    def test_none_for_truncated_json_answer_prefix(self):
+        assert extract_number('{"answer": 4923') is None
 
-    def test_multiline_response_with_numeric_final_line(self):
+    def test_none_for_multiline_response_with_numeric_final_line(self):
         assert (
             extract_number("I estimate the federal income tax is modest.\n\n3500")
-            == 3500.0
+            is None
         )
 
     def test_none_for_explanatory_sentence(self):
@@ -200,7 +225,7 @@ class TestExtractPrediction:
         )
         assert predictions == {"income_tax": 4923.0, "eitc": 0.0}
 
-    def test_extract_predictions_salvages_complete_answers_from_truncated_explanations(
+    def test_extract_predictions_rejects_truncated_payload(
         self,
     ):
         predictions = extract_predictions(
@@ -211,7 +236,7 @@ class TestExtractPrediction:
             variables=["income_tax", "eitc"],
             tool_calls=None,
         )
-        assert predictions == {"income_tax": 4923.0, "eitc": 0.0}
+        assert predictions == {"income_tax": None, "eitc": None}
 
     def test_extract_explanations_returns_mapping(self):
         explanations = extract_explanations(
@@ -229,7 +254,7 @@ class TestExtractPrediction:
             "eitc": None,
         }
 
-    def test_extract_explanations_salvages_complete_prefix_from_truncated_payload(self):
+    def test_extract_explanations_rejects_truncated_payload(self):
         explanations = extract_explanations(
             content=(
                 '{"answers":{"income_tax":4923,"eitc":0},"explanations":{'
@@ -240,9 +265,20 @@ class TestExtractPrediction:
             tool_calls=None,
         )
         assert explanations == {
-            "income_tax": "Moderate taxable income.",
+            "income_tax": None,
             "eitc": None,
         }
+
+    def test_extract_predictions_does_not_scrape_stray_numbers_from_prose(self):
+        predictions = extract_predictions(
+            content=(
+                "For free school meals, household income must be at or below "
+                "130% of the federal poverty level."
+            ),
+            variables=["free_school_meals"],
+            tool_calls=None,
+        )
+        assert predictions == {"free_school_meals": None}
 
 
 def test_no_tools_prompt_contains_household_info(mini_scenario):
@@ -952,6 +988,12 @@ def test_run_no_tools_eval_resumes_from_existing_output(
             }
         ]
     ).to_csv(output_path, index=False)
+    _write_resume_sidecar(
+        output_path,
+        [mini_scenario],
+        models={"gpt-5.4": "gpt-5.4"},
+        programs=["income_tax", "eitc"],
+    )
 
     mock_run_single_no_tools.return_value = {
         "predictions": {"income_tax": 123.0, "eitc": 456.0},
@@ -1002,6 +1044,12 @@ def test_run_no_tools_eval_retries_rows_with_existing_errors(
             },
         ]
     ).to_csv(output_path, index=False)
+    _write_resume_sidecar(
+        output_path,
+        [mini_scenario],
+        models={"gpt-5.4": "gpt-5.4"},
+        programs=["income_tax", "eitc"],
+    )
 
     mock_run_single_no_tools.return_value = {
         "predictions": {"income_tax": 123.0, "eitc": 456.0},
@@ -1052,6 +1100,12 @@ def test_run_no_tools_eval_retries_rows_with_missing_predictions(
             },
         ]
     ).to_csv(output_path, index=False)
+    _write_resume_sidecar(
+        output_path,
+        [mini_scenario],
+        models={"gpt-5.4": "gpt-5.4"},
+        programs=["income_tax", "eitc"],
+    )
 
     mock_run_single_no_tools.return_value = {
         "predictions": {"income_tax": 123.0, "eitc": 456.0},
@@ -1070,6 +1124,118 @@ def test_run_no_tools_eval_retries_rows_with_missing_predictions(
     assert len(df) == 2
     assert df.loc[df["variable"] == "income_tax", "prediction"].iloc[0] == 123.0
     assert mock_run_single_no_tools.call_count == 1
+
+
+@patch("policybench.eval_no_tools.run_single_no_tools")
+def test_run_no_tools_eval_writes_resume_metadata(
+    mock_run_single_no_tools,
+    mini_scenario,
+    tmp_path,
+):
+    """Each checkpointed output should include a metadata sidecar for safe resume."""
+    output_path = tmp_path / "predictions.csv"
+    mock_run_single_no_tools.return_value = {
+        "predictions": {"income_tax": 123.0},
+        "prediction": 123.0,
+        "raw_response": "123",
+        "error": None,
+    }
+
+    run_no_tools_eval(
+        [mini_scenario],
+        models={"gpt-5.4": "gpt-5.4"},
+        programs=["income_tax"],
+        output_path=str(output_path),
+    )
+
+    metadata_path = tmp_path / "predictions.csv.meta.json"
+    assert metadata_path.exists()
+    metadata = json.loads(metadata_path.read_text())
+    assert metadata["task"] == "eval_no_tools_batch"
+    assert metadata["scenario_count"] == 1
+    assert metadata["programs"] == ["income_tax"]
+    assert metadata["models"] == {"gpt-5.4": "gpt-5.4"}
+
+
+@patch("policybench.eval_no_tools.run_single_no_tools")
+def test_run_no_tools_eval_rejects_existing_output_without_metadata(
+    mock_run_single_no_tools,
+    mini_scenario,
+    tmp_path,
+):
+    """Existing CSVs without a sidecar should not be resumed silently."""
+    output_path = tmp_path / "predictions.csv"
+    pd = pytest.importorskip("pandas")
+    pd.DataFrame(
+        [
+            {
+                "model": "gpt-5.4",
+                "scenario_id": "mini",
+                "variable": "income_tax",
+                "prediction": 123.0,
+                "raw_response": "123",
+                "error": None,
+            }
+        ]
+    ).to_csv(output_path, index=False)
+
+    with pytest.raises(ValueError, match="missing its resume metadata sidecar"):
+        run_no_tools_eval(
+            [mini_scenario],
+            models={"gpt-5.4": "gpt-5.4"},
+            programs=["income_tax"],
+            output_path=str(output_path),
+        )
+
+    mock_run_single_no_tools.assert_not_called()
+
+
+@patch("policybench.eval_no_tools.run_single_no_tools")
+def test_run_no_tools_eval_rejects_mismatched_resume_metadata(
+    mock_run_single_no_tools,
+    mini_scenario,
+    tmp_path,
+):
+    """A sidecar from a different benchmark configuration should fail fast."""
+    output_path = tmp_path / "predictions.csv"
+    pd = pytest.importorskip("pandas")
+    pd.DataFrame(
+        [
+            {
+                "model": "gpt-5.4",
+                "scenario_id": "mini",
+                "variable": "income_tax",
+                "prediction": 123.0,
+                "raw_response": "123",
+                "error": None,
+            }
+        ]
+    ).to_csv(output_path, index=False)
+    metadata_path = tmp_path / "predictions.csv.meta.json"
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "metadata_version": 1,
+                "task": "eval_no_tools_batch",
+                "run_id": None,
+                "include_explanations": False,
+                "scenario_count": 1,
+                "scenario_hash": "different",
+                "programs": ["income_tax"],
+                "models": {"gpt-5.4": "gpt-5.4"},
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="does not match the requested benchmark settings"):
+        run_no_tools_eval(
+            [mini_scenario],
+            models={"gpt-5.4": "gpt-5.4"},
+            programs=["income_tax"],
+            output_path=str(output_path),
+        )
+
+    mock_run_single_no_tools.assert_not_called()
 
 
 @patch("policybench.eval_no_tools.run_single_no_tools")

@@ -583,6 +583,31 @@ def scenario_manifest(scenarios: list[Scenario]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def load_scenarios_from_manifest(path: str | Path) -> list[Scenario]:
+    """Reconstruct scenarios from a serialized scenario manifest."""
+    manifest = pd.read_csv(path)
+    if "scenario_json" not in manifest.columns:
+        raise ValueError(
+            "Scenario manifest must include a scenario_json column. "
+            "Regenerate it with `policybench ground-truth`."
+        )
+
+    scenarios = []
+    for _, row in manifest.iterrows():
+        scenario_json = row["scenario_json"]
+        if pd.isna(scenario_json):
+            raise ValueError("Scenario manifest contains an empty scenario_json value.")
+        scenario = scenario_from_dict(json.loads(str(scenario_json)))
+        scenario_id = str(row.get("scenario_id", scenario.id))
+        if scenario.id != scenario_id:
+            raise ValueError(
+                f"Scenario manifest row id mismatch: expected {scenario_id}, "
+                f"found {scenario.id} in scenario_json."
+            )
+        scenarios.append(scenario)
+    return scenarios
+
+
 def _prepare_cps_frame(person_df: pd.DataFrame) -> pd.DataFrame:
     missing = REQUIRED_CPS_COLUMNS - set(person_df.columns)
     if missing:

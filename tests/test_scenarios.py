@@ -9,6 +9,7 @@ from policybench.scenarios import (
     SUPPORTED_FILING_STATUSES,
     generate_scenarios,
     load_excluded_household_ids,
+    load_scenarios_from_manifest,
     scenario_manifest,
     scenarios_from_cps_frame,
     scenarios_from_uk_frames,
@@ -687,6 +688,24 @@ def test_scenario_manifest_exports_summary_fields(sample_person_frame):
     }
     assert len(manifest) == 2
     assert manifest["scenario_id"].str.startswith("scenario_").all()
+
+
+def test_load_scenarios_from_manifest_round_trips(sample_person_frame, tmp_path):
+    """Serialized manifests should reconstruct the exact scenarios."""
+    scenarios = scenarios_from_cps_frame(sample_person_frame, n=2, seed=0)
+    manifest_path = tmp_path / "scenarios.csv"
+    scenario_manifest(scenarios).to_csv(manifest_path, index=False)
+
+    loaded = load_scenarios_from_manifest(manifest_path)
+
+    assert [scenario.id for scenario in loaded] == [scenario.id for scenario in scenarios]
+    assert [scenario.state for scenario in loaded] == [scenario.state for scenario in scenarios]
+    assert [scenario.filing_status for scenario in loaded] == [
+        scenario.filing_status for scenario in scenarios
+    ]
+    assert [scenario.total_income for scenario in loaded] == [
+        scenario.total_income for scenario in scenarios
+    ]
 
 
 def test_scenarios_from_uk_frames_include_region_and_household_inputs(sample_uk_frames):
